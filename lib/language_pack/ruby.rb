@@ -1,3 +1,4 @@
+# Modified by Felix Fong line 24-27 and line 8670-881 and line 962-966
 require "tmpdir"
 require "digest/md5"
 require "benchmark"
@@ -19,6 +20,11 @@ class LanguagePack::Ruby < LanguagePack::Base
   DEFAULT_RUBY_VERSION = "ruby-2.2.3"
   RBX_BASE_URL         = "https://binaries.rubini.us/heroku"
   NODE_BP_PATH         = "vendor/node/bin"
+  
+  DB2_DSDRIVER_URL     = "https://public.dhe.ibm.com/ibmdl/export/pub/software/data/db2/drivers/odbc_cli/linuxx64_odbc_cli.tar.gz"
+  DB2_DSDRIVER_FILE    = "clidriver.tgz"
+  DB2_DSDRIVER_STAGING_LOC = "/tmp/staged/app/vendor/bundle"
+  DB2_DSDRIVER_RUNTIME_LOC = "$HOME/vendor/bundle/clidriver/lib"
 
   # detects if this is a valid Ruby app
   # @return [Boolean] true if it's a Ruby app
@@ -847,6 +853,34 @@ params = CGI.parse(uri.query || "")
         @bundler_cache.load
       end
 
+    if File.exist?("#{DB2_DSDRIVER_STAGING_LOC}/v9.7fp9a_linuxx64_rtcl.tar.gz")
+	    # nothing to do, there is one from cache
+	  else
+	    puts "Downloading and untarring DB2 v9.7fp9a runtime client...."
+	    if fetch_package_and_untar(DB2_DSDRIVER_FILE, DB2_DSDRIVER_URL)
+          puts "IBM DB2 v9.7fp9a runtime client downloaded successfully"
+        else
+           error "Failed to download DB2 v9.7fp9a runtime client . Check if #{DB2_DSDRIVER_URL} is available "
+	    end
+	end
+	
+	# install db2 ODBC if required
+	if File.exist?("#{DB2_DSDRIVER_STAGING_LOC}/clidriver/lib/libdb2.so")
+	   # nothing to do, is there from cache
+	else
+	  puts "downloading and untarring DB2 CLI driver...."
+	  if fetch_package_and_untar_to_folder(DB2_DSDRIVER_FILE, DB2_DSDRIVER_URL, DB2_DSDRIVER_STAGING_LOC)
+		puts "setting DB2 ODBC driver ENV variables"
+	  else
+		error "Failed to download DB2 ODBC driver. Check if #{DB2_DSDRIVER_URL} is available "
+	  end
+	end
+	
+
+	ENV["IBM_DB_HOME"]     = "#{DB2_DSDRIVER_STAGING_LOC}/clidriver"
+	set_env_override "LD_LIBRARY_PATH", "#{DB2_DSDRIVER_RUNTIME_LOC}:$LD_LIBRARY_PATH"
+	
+     
       # fix bug from v37 deploy
       if File.exists?("vendor/ruby_version")
         puts "Broken cache detected. Purging build cache."
@@ -910,4 +944,23 @@ params = CGI.parse(uri.query || "")
       install_bundler_in_app
     end
   end
+end
+
+def fetch_package(filename, url=VENDOR_URL)      
+    fetch_from_curl(filename, url)
+end
+
+def fetch_package_and_untar(filename, url=VENDOR_URL)
+  fetch_package(filename, url) && run("tar xzf #{filename}")
+end
+
+def fetch_from_curl(filename, url)
+   system("wget #{url}/#{filename} -O #{filename}")
+   File.exist?(filename)
+end
+
+def fetch_package_and_untar_to_folder(filename, url, stagedDestfolder)
+      run("curl #{url} -s -o #{filename}") && run("tar xvzf #{filename} -C #{stagedDestfolder}")
+      # return if file exists
+      File.exist?("#{stagedDestfolder}/clidriver/lib/libdb2.so")
 end
